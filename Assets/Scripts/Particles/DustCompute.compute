@@ -1,0 +1,118 @@
+#pragma kernel InitDust
+#pragma kernel UpdateDust
+
+struct Particle {
+	float3 position;
+	float3 velocity;
+	float sizeMultiplier;
+};
+
+Texture2D<float4> SpawnMap;
+RWStructuredBuffer<float4> positions;
+RWStructuredBuffer<Particle> particles;
+RWStructuredBuffer<uint> numParticlesConsumed;
+uint numParticles;
+float deltaTime;
+float3 attractPos;
+float3 xAxis;
+float attractRadius;
+float attractForce;
+float size;
+
+// Hash function www.cs.ubc.ca/~rbridson/docs/schechter-sca08-turbulence.pdf
+uint hash(uint state)
+{
+    state ^= 2747636419u;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    state ^= state >> 16;
+    state *= 2654435769u;
+    return state;
+}
+
+float scaleToRange01(uint state)
+{
+    return state / 4294967295.0;
+}
+
+
+[numthreads(64,1,1)]
+void InitDust (uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= numParticles) {
+		return;
+	}
+
+	uint randState = id.x;
+	float maxSpawnVal = 0;
+	float spawnTX = 0;
+	float spawnTY = 0;
+
+	int numZeros = 0;
+
+	for (int i = 0; i < 3; i ++) {
+		randState = hash(randState);
+		float tx = scaleToRange01(randState);
+		randState = hash(randState);
+		float ty = scaleToRange01(randState);
+
+		float spawnVal = SpawnMap[uint2(tx * 1023, ty * 1023)].r;
+
+		if (spawnVal == 0 && numZeros < 5) {
+			i --;
+			numZeros++;
+		}
+
+		if (spawnVal > maxSpawnVal) {
+			maxSpawnVal = spawnVal;
+			spawnTX = tx;
+			spawnTY = ty;
+		}
+	}
+
+	positions[id.x] = float4(-15 + spawnTX * 30, 0.05, -15 + spawnTY * 30, 1);
+	particles[id.x].position = positions[id.x].xyz;
+}
+
+[numthreads(64,1,1)]
+void UpdateDust (uint3 id : SV_DispatchThreadID)
+{
+	uint i = id.x;
+
+    if (i >= numParticles || particles[i].sizeMultiplier == 0) {
+		return;
+	}
+	float3 pos = particles[i].position;
+
+	float3 offsetToAttractor = attractPos - pos;
+	offsetToAttractor.y = 0;
+
+	float sqrDst = dot(offsetToAttractor, offsetToAttractor);
+	particles[i].velocity -= particles[i].velocity * deltaTime * 5;
+
+	if (sqrDst < attractRadius*attractRadius && attractForce > 0) {
+		float dst = sqrt(sqrDst);
+		float3 dir = offsetToAttractor / dst;
+		float t = 1 - dst / attractRadius;
+		particles[i].velocity += deltaTime * dir * attractForce * t;
+
+		float3 mouthPos2 = attractPos + xAxis * 0.3;
+		float3 mouthPos3 = attractPos - xAxis * 0.3;
+		float3 offset2 = mouthPos2 - particles[i].position;
+		float3 offset3 = mouthPos3 - particles[i].position;
+		float eatDst = 0.2;
+		float sqrEatDst = eatDst * eatDst;
+
+		if (sqrDst < sqrEatDst || dot(offset2,offset2) < sqrEatDst || dot(offset3, offset3) < sqrEatDst) {
+			particles[i].sizeMultiplier = 0;
+			InterlockedAdd(numParticlesConsumed[0],1);
+		}
+
+		//float2 startPos = float2(particles[i].position);
+		//float2 endPos = startPos + float2(particles[i].velocity) * deltaTime
+	}
+
+	particles[i].position += particles[i].velocity * deltaTime;
+	positions[i] = float4(particles[i].position, size * particles[i].sizeMultiplier);
+}

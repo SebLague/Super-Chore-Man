@@ -1,0 +1,46 @@
+
+#pragma kernel CSMain
+
+
+struct Particle {
+	float3 position;
+	float3 velocity;
+	float2 ellipse;
+	float speed;
+
+	float3 ihat;
+	float3 jhat;
+};
+
+RWStructuredBuffer<float4> positions;
+RWStructuredBuffer<Particle> particles;
+
+uint numParticles;
+float deltaTime;
+float size;
+float3 target;
+float speedMultiplier;
+float orbitRadiusMultiplier;
+float moveToTargetSpeed;
+float time;
+
+
+[numthreads(64,1,1)]
+void CSMain (uint3 id : SV_DispatchThreadID)
+{
+	if (id.x >= numParticles) {
+		return;
+	}
+	Particle p = particles[id.x];
+
+	float localX = sin(time * p.speed * speedMultiplier) * p.ellipse.x * orbitRadiusMultiplier;
+	float localY = cos(time * p.speed * speedMultiplier) * p.ellipse.y * orbitRadiusMultiplier;
+
+	float3 pos = lerp(p.position, target, moveToTargetSpeed * deltaTime * p.speed * p.speed * p.speed);
+	particles[id.x].position = pos;
+
+	pos += p.ihat * localX + p.jhat * localY;
+	
+	//pos += target;
+	positions[id.x] = float4(pos, size);
+}
